@@ -123,8 +123,10 @@ button.ghost { border-color: var(--line); color: var(--muted); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.active { background: var(--accent); color: var(--accent-ink); }
 .wb { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
-.notes { font-size: 13px; color: var(--muted); padding: 0 4px; }
-.notes ul { padding-left: 18px; margin: 6px 0; }
+.notes { margin: 4px 20px 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
+.notes h2 { font-size: 15px; margin: 0 0 4px; }
+.notes ul { padding-left: 20px; margin: 0; }
+.notes li { margin: 2px 0; }
 dialog {
   border: 1px solid var(--line);
   border-radius: 12px;

@@ -14,6 +14,15 @@
   <p class="privacy" id="toolVer"></p>
 </header>
 
+<section class="notes">
+  <h2>使用前請讀</h2>
+  <ul>
+      <li>這個工具不判斷圖片能不能發布、發在哪裡。BA 圖用於醫療廣告依法禁止；用於衛教要搭配完整衛教內容，並取得當事人書面同意。</li>
+      <li>白平衡只校正整張照片的色溫，不做局部修圖、不磨皮、不液化，也不會拉伸照片。</li>
+      <li>光源方向、陰影、反光差太多的照片沒辦法靠校正補救，請重拍。</li>
+  </ul>
+</section>
+
 <main class="layout">
   <section class="stage">
     <div class="canvas-wrap" id="canvasWrap">
@@ -81,22 +90,13 @@
     <div class="step">
       <h2>6. 匯出</h2>
       <div class="btn-row">
-        <button type="button" id="exportBtn" class="primary">匯出 BA 圖</button>
-        <button type="button" id="loadProjectBtn" class="ghost">打開專案檔</button>
+        <button type="button" id="exportBtn" class="primary">按我匯出</button>
         <input type="file" id="projectInput" accept="application/json,.json" hidden>
       </div>
-      <p class="hint">匯出時會同時下載一份專案檔（.json），之後要改，打開它再選回原始照片，就能從原圖重做。</p>
+      <p class="hint">按下去會先跳出檢查清單，勾完就會下載一張 PNG 圖片。</p>
       <p class="warn" id="fontWarn"></p>
     </div>
 
-    <details class="notes">
-      <summary>使用前請讀</summary>
-      <ul>
-        <li>這個工具不判斷圖片能不能發布、發在哪裡。BA 圖用於醫療廣告依法禁止；用於衛教要搭配完整衛教內容，並取得當事人書面同意。</li>
-        <li>白平衡只校正整張照片的色溫，不做局部修圖、不磨皮、不液化，也不會拉伸照片。</li>
-        <li>光源方向、陰影、反光差太多的照片沒辦法靠校正補救，請重拍。</li>
-      </ul>
-    </details>
   </aside>
 </main>
 

@@ -1126,14 +1126,12 @@ $('#exportBtn').addEventListener('click', async () => {
     const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
     const base = `BA_${safeName(state.title)}_${stamp}`;
     download(blob, `${base}.png`);
-    download(new Blob([JSON.stringify(projectData(), null, 2)], { type: 'application/json' }), `${base}.json`);
     rememberTreatment(state.title);
-    setMsg(`已匯出 ${base}.png 和專案檔`);
+    setMsg(`已匯出 ${base}.png`);
     render();
   }, { once: true });
 });
 
-$('#loadProjectBtn').addEventListener('click', () => $('#projectInput').click());
 $('#projectInput').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   e.target.value = '';
