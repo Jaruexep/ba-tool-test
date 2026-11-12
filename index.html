@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BA 圖製作</title>
+<link rel="stylesheet" href="fonts/noto-sans-tc-400.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>BA 圖製作</h1>
+  <p class="privacy">照片只在這台裝置上處理，不會上傳。</p>
+  <p class="privacy" id="toolVer"></p>
+</header>
+
+<main class="layout">
+  <section class="stage">
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="view" width="1197" height="1315" aria-label="BA 圖預覽"></canvas>
+      <div class="drop-hint" id="dropHint">把 Before、After 照片拖進來</div>
+    </div>
+    <div class="stage-tools">
+      <label><input type="checkbox" id="optOnion"> 疊圖檢查（After 半透明疊在 Before 上）</label>
+      <label><input type="checkbox" id="optRaw"> 拿掉淡出和標籤，看照片下緣</label>
+    </div>
+    <p class="mode-msg" id="modeMsg"></p>
+  </section>
+
+  <aside class="panel">
+    <div class="step">
+      <h2>1. 照片</h2>
+      <div class="pick-row">
+        <label class="pick" id="pickBefore">
+          <span>Before</span>
+          <input type="file" accept="image/*" data-slot="before">
+          <small class="fname" data-fname="before">尚未選擇</small>
+        </label>
+        <label class="pick" id="pickAfter">
+          <span>After</span>
+          <input type="file" accept="image/*" data-slot="after">
+          <small class="fname" data-fname="after">尚未選擇</small>
+        </label>
+      </div>
+      <p class="hint">照片放進來會自動填滿格子，位置和大小不用自己調。</p>
+      <p class="warn" id="coverWarn"></p>
+    </div>
+
+    <div class="step">
+      <h2>2. 療程</h2>
+      <div class="row">
+        <input type="text" id="treatment" list="treatmentList" placeholder="例如：嘴唇玻尿酸">
+        <datalist id="treatmentList"></datalist>
+      </div>
+      <p class="warn" id="titleWarn"></p>
+    </div>
+
+    <div class="step">
+      <h2>3. 對齊大小與位置</h2>
+      <p class="hint">工具會自動比對兩張照片，把 After 調成跟 Before 一樣大、擺在同一個位置，再一起調到填滿格子。</p>
+      <p class="status" id="alignStatus">兩張照片都放進來，就會自動對齊。</p>
+    </div>
+
+    <div class="step">
+      <h2>4. 白平衡</h2>
+      <p class="hint">工具會自動找照片裡本來是白色或灰色的地方（白牆、白衣、灰卡），把偏黃、偏藍調回正常色溫。找不到這種地方就維持原色，不會拿皮膚來調。</p>
+      <p class="status"><strong>Before</strong>：<span data-wb-status="before">還沒放照片</span></p>
+      <p class="status"><strong>After</strong>：<span data-wb-status="after">還沒放照片</span></p>
+    </div>
+
+    <div class="step">
+      <h2>5. 遮蔽</h2>
+      <p class="hint">刺青、名牌、病歷文字、背景人物要遮起來時，按下面的按鈕，再到預覽上拖一個框。框裡會打上馬賽克，邊緣會自然淡出。</p>
+      <div class="btn-row">
+        <button type="button" id="addMask">新增遮蔽</button>
+        <button type="button" id="clearMasks" class="ghost">清除全部遮蔽</button>
+      </div>
+      <p class="status" id="maskStatus">沒有遮蔽</p>
+    </div>
+
+    <div class="step">
+      <h2>6. 匯出</h2>
+      <div class="btn-row">
+        <button type="button" id="exportBtn" class="primary">匯出 BA 圖</button>
+        <button type="button" id="loadProjectBtn" class="ghost">打開專案檔</button>
+        <input type="file" id="projectInput" accept="application/json,.json" hidden>
+      </div>
+      <p class="hint">匯出時會同時下載一份專案檔（.json），之後要改，打開它再選回原始照片，就能從原圖重做。</p>
+      <p class="warn" id="fontWarn"></p>
+    </div>
+
+    <details class="notes">
+      <summary>使用前請讀</summary>
+      <ul>
+        <li>這個工具不判斷圖片能不能發布、發在哪裡。BA 圖用於醫療廣告依法禁止；用於衛教要搭配完整衛教內容，並取得當事人書面同意。</li>
+        <li>白平衡只校正整張照片的色溫，不做局部修圖、不磨皮、不液化，也不會拉伸照片。</li>
+        <li>光源方向、陰影、反光差太多的照片沒辦法靠校正補救，請重拍。</li>
+      </ul>
+    </details>
+  </aside>
+</main>
+
+<dialog id="treatmentDialog">
+  <form method="dialog">
+    <h3>這次做什麼療程？</h3>
+    <p class="hint">會顯示在圖片最上方。</p>
+    <input type="text" id="dialogTreatment" list="treatmentList" placeholder="例如：嘴唇玻尿酸" required>
+    <menu>
+      <button type="button" class="ghost" data-close>之後再填</button>
+      <button value="ok" class="primary">確定</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="exportDialog">
+  <form method="dialog">
+    <h3>匯出前確認</h3>
+    <label><input type="checkbox" required> 當事人書面同意書涵蓋這次的用途與刊登範圍</label>
+    <label><input type="checkbox" required> 已檢查臉、刺青、名牌、病歷文字、背景人物，需要的都遮蔽了</label>
+    <label><input type="checkbox" required> 了解 BA 圖不能用於醫療廣告，發布與否由診所自行判斷</label>
+    <menu>
+      <button type="button" class="ghost" data-close>取消</button>
+      <button value="ok" class="primary">確認匯出</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="relinkDialog">
+  <form method="dialog">
+    <h3>選回原始照片</h3>
+    <p class="hint" id="relinkInfo"></p>
+    <label class="pick">Before 原圖 <input type="file" accept="image/*" id="relinkBefore"></label>
+    <label class="pick">After 原圖 <input type="file" accept="image/*" id="relinkAfter"></label>
+    <p class="warn" id="relinkWarn"></p>
+    <menu>
+      <button type="button" class="ghost" data-close>取消</button>
+      <button value="ok" class="primary" id="relinkOk">載入</button>
+    </menu>
+  </form>
+</dialog>
+
+<script src="assets/frame.js"></script>
+<script src="assets/version.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
