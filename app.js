@@ -80,6 +80,28 @@ function loadImage(src) {
 
 function setMsg(text) { $('#modeMsg').textContent = text || ''; }
 
+// 放照片、自動對齊、匯出進行中，匯出按鈕鎖住，避免匯出到還沒換好的舊照片
+let busyCount = 0;
+function setBusy(on) {
+  busyCount = Math.max(0, busyCount + (on ? 1 : -1));
+  const b = $('#exportBtn');
+  b.disabled = busyCount > 0;
+  b.textContent = busyCount > 0 ? '處理中…' : '按我匯出';
+}
+
+// LINE 內建瀏覽器常存不了下載的圖：網址加 openExternalBrowser=1，LINE 會改用手機的預設瀏覽器打開（LINE 官方支援）。
+// 只試一次；跳不過去就在最上面提示同仁自己改用瀏覽器。
+(function leaveLine() {
+  if (!/Line\//i.test(navigator.userAgent)) return;
+  const u = new URL(location.href);
+  if (u.protocol.startsWith('http') && !u.searchParams.has('openExternalBrowser')) {
+    u.searchParams.set('openExternalBrowser', '1');
+    location.replace(u.toString());
+    return;
+  }
+  $('#lineWarn').hidden = false;
+})();
+
 function download(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -97,6 +119,15 @@ function coverTransform(slot, iw, ih) {
   return { a: c(s, 0), b: c(x + w / 2 - (s * iw) / 2, y + h / 2 - (s * ih) / 2) };
 }
 
+const PHOTO_MAX = 4000;
+function releasePhoto(p) {
+  if (!p) return;
+  if (p.bitmap && p.bitmap.close) p.bitmap.close();
+  else if (p.bitmap) { p.bitmap.width = 0; p.bitmap.height = 0; }
+  if (p.work) { p.work.width = 0; p.work.height = 0; }
+  if (p.cache && p.cache.canvas) { p.cache.canvas.width = 0; p.cache.canvas.height = 0; }
+}
+
 // 每格記最新一次載入的序號：連續拖兩張進同一格時，只有最後拖的那張能放進去（大檔慢讀完也不會蓋掉新的）
 const loadSeq = { before: 0, after: 0 };
 
@@ -109,6 +140,19 @@ async function loadPhoto(slot, file, opts = {}) {
   } catch {
     alert(`這張照片讀不了（${file.name}）。如果是 iPhone 的 HEIC，請到「設定 > 相機 > 格式」改成「最相容」，或先轉成 JPG 再拖進來。`);
     return null;
+  }
+  // 超大照片先縮到長邊 4000，原本那份馬上釋放：輸出格約 596 寬、自動放大最多 6 倍，4000 已經夠用，手機比較不會記憶體不足
+  if (Math.max(bitmap.width, bitmap.height) > PHOTO_MAX) {
+    const s = PHOTO_MAX / Math.max(bitmap.width, bitmap.height);
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(bitmap.width * s);
+    cv.height = Math.round(bitmap.height * s);
+    const g = cv.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(bitmap, 0, 0, cv.width, cv.height);
+    if (bitmap.close) bitmap.close();
+    bitmap = cv;
   }
   const k = Math.min(1, WORK_MAX / Math.max(bitmap.width, bitmap.height));
   const work = document.createElement('canvas');
@@ -131,7 +175,8 @@ async function loadPhoto(slot, file, opts = {}) {
   photo.baseS = cAbs(photo.t.a);
   if (opts.expectHash && opts.expectHash !== hash) return { mismatch: true, photo };
   if (opts.dryRun) return { photo };
-  if (opts.token != null && opts.token !== loadSeq[slot]) return { stale: true };
+  if (opts.token != null && opts.token !== loadSeq[slot]) { releasePhoto(photo); return { stale: true }; }
+  releasePhoto(state.photos[slot]);
   state.photos[slot] = photo;
   document.querySelector(`[data-fname="${slot}"]`).textContent = file.name;
   return { photo };
@@ -200,7 +245,9 @@ function grayish(px, gains, maxChroma, maxRG) {
     const r = r0 * gains[0], g = g0 * gains[1], b = b0 * gains[2];
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
     if (Math.max(r0, g0, b0) >= 250 || mx < 70) return false;
-    return (mx - mn) / mx < maxChroma && (maxRG == null || Math.abs(r - g) / mx < maxRG);
+    // 皮膚一定是紅比綠多，所以紅比綠多的一側卡得很緊（maxRG）；偏藍的白牆會變成紅比綠少，那一側放寬到 15%
+    const rg = (r - g) / mx;
+    return (mx - mn) / mx < maxChroma && (maxRG == null || (rg < maxRG && rg > -0.15));
   });
 }
 function meanRGB(list) {
@@ -910,11 +957,13 @@ function askTreatment() {
 function setMode(mode) {
   state.mode = mode;
   view.classList.toggle('picking', Boolean(mode));
+  $('#maskBar').hidden = !(mode && mode.type === 'mask');
+  refreshUndo();
   $('#addMask').classList.remove('active');
   if (!mode) { setMsg(''); render(); return; }
   if (mode.type === 'mask') {
     $('#addMask').classList.add('active');
-    setMsg('在預覽上拖一個框，框住要遮起來的地方（按 Esc 取消）');
+    setMsg('');
   }
   render();
 }
@@ -950,6 +999,7 @@ function endDrag() {
     const x0 = Math.min(d.x0, d.x1), y0 = Math.min(d.y0, d.y1), x1 = Math.max(d.x0, d.x1), y1 = Math.max(d.y0, d.y1);
     // 框跨過中間分隔線時，拆成兩張照片各自的遮蔽，兩邊都遮到
     let added = 0;
+    const group = ++maskGroupSeq; // 同一次拖曳拆成的兩筆共用一個編號，「刪掉上一個框」才會兩邊一起刪
     for (const slot of ['before', 'after']) {
       const photo = state.photos[slot];
       if (!photo) continue;
@@ -957,11 +1007,12 @@ function endDrag() {
       const ix0 = Math.max(x0, sx), iy0 = Math.max(y0, sy), ix1 = Math.min(x1, sx + sw), iy1 = Math.min(y1, sy + sh);
       if (ix1 - ix0 < 4 || iy1 - iy0 < 4) continue;
       const quad = [c(ix0, iy0), c(ix1, iy0), c(ix1, iy1), c(ix0, iy1)].map((q) => invT(photo.t, q));
-      state.masks.push({ slot, quad });
+      state.masks.push({ slot, quad, group });
       added++;
     }
-    setMode(null);
+    // 框完留在框選模式，可以接著框下一個；按「完成」才結束
     if (!added && (x1 - x0 > 6 || y1 - y0 > 6)) setMsg('遮蔽框要拖在照片上');
+    else setMsg('');
     refreshMaskStatus();
   }
   state.drag = null;
@@ -973,7 +1024,21 @@ view.addEventListener('pointercancel', endDrag);
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.mode) setMode(null); });
 
+let maskGroupSeq = 0;
+function undoLastMask() {
+  if (!state.masks.length) return;
+  const g = state.masks[state.masks.length - 1].group;
+  state.masks = g == null ? state.masks.slice(0, -1) : state.masks.filter((m) => m.group !== g);
+  refreshMaskStatus();
+  render();
+}
+function refreshUndo() {
+  const none = !state.masks.length;
+  $('#undoMask').disabled = none;
+  $('#undoMaskBar').disabled = none;
+}
 function refreshMaskStatus() {
+  refreshUndo();
   $('#maskStatus').textContent = state.masks.length ? `已遮蔽 ${state.masks.length} 處（紅色虛線框，會跟著照片移動；匯出時不會出現虛線）` : '沒有遮蔽';
 }
 
@@ -986,6 +1051,13 @@ async function handleFiles(files, preferSlot) {
   else order = [preferSlot || (!state.photos.before ? 'before' : 'after')];
   const n = Math.min(imgs.length, order.length);
   const tokens = order.slice(0, n).map((slot) => ++loadSeq[slot]); // 拖進來的當下就領號，不等讀完
+  setBusy(true);
+  try { await placeFiles(imgs, order, n, tokens); } finally { setBusy(false); }
+  render();
+  askTreatment();
+}
+
+async function placeFiles(imgs, order, n, tokens) {
   for (let i = 0; i < n; i++) {
     const slot = order[i];
     const res = await loadPhoto(slot, imgs[i], { token: tokens[i] });
@@ -1007,8 +1079,6 @@ async function handleFiles(files, preferSlot) {
     if (lowRes) setMsg(`${SLOT_NAME[slot]} 照片解析度偏低，放進外框會被放大，可能有點糊`);
   }
   await autoAlign();
-  render();
-  askTreatment();
 }
 
 document.querySelectorAll('input[type="file"][data-slot]').forEach((input) => {
@@ -1033,7 +1103,15 @@ $('#treatment').addEventListener('change', (e) => setTitle(e.target.value));
 $('#optOnion').addEventListener('change', (e) => { state.onion = e.target.checked; render(); });
 $('#optRaw').addEventListener('change', (e) => { state.raw = e.target.checked; render(); });
 
-$('#addMask').addEventListener('click', () => setMode({ type: 'mask' }));
+$('#addMask').addEventListener('click', () => {
+  if (state.mode && state.mode.type === 'mask') { setMode(null); return; }
+  setMode({ type: 'mask' });
+  // 手機上預覽在上面、按鈕在下面，按了自動捲回預覽
+  $('#maskBar').scrollIntoView({ block: 'start', behavior: 'smooth' });
+});
+$('#doneMask').addEventListener('click', () => setMode(null));
+$('#undoMask').addEventListener('click', undoLastMask);
+$('#undoMaskBar').addEventListener('click', undoLastMask);
 $('#clearMasks').addEventListener('click', () => { state.masks = []; refreshMaskStatus(); render(); });
 
 // ---------- 匯出與專案檔 ----------
@@ -1101,7 +1179,9 @@ function safeName(s) { return s.replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 30) || 
 
 $('#exportBtn').addEventListener('click', async () => {
   const problems = [];
+  if (busyCount > 0) return;
   if (!state.photos.before || !state.photos.after) problems.push('兩張照片都要放進來');
+  else if (!state.aligned) problems.push('兩張照片對不起來，做出來的大小、位置會不一樣。請用同樣角度、同樣距離重拍，再放進來');
   if (!state.title) problems.push('還沒填療程');
   else if (!titleLayout(vctx, state.title).fits) problems.push('療程名稱太長');
   await checkFont();
@@ -1116,18 +1196,33 @@ $('#exportBtn').addEventListener('click', async () => {
   dlg.addEventListener('close', async () => {
     if (dlg.returnValue !== 'ok') return;
     setMsg('正在用原圖輸出，請稍等…');
-    await new Promise((r) => setTimeout(r, 30));
-    const out = document.createElement('canvas');
-    out.width = W;
-    out.height = H;
-    compose(out.getContext('2d'), { exportMode: true });
-    const blob = await new Promise((r) => out.toBlob(r, 'image/png'));
-    const d = new Date();
-    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
-    const base = `BA_${safeName(state.title)}_${stamp}`;
+    setBusy(true);
+    let blob = null;
+    let base = '';
+    try {
+      await new Promise((r) => setTimeout(r, 30));
+      const out = document.createElement('canvas');
+      out.width = W;
+      out.height = H;
+      compose(out.getContext('2d'), { exportMode: true });
+      blob = await new Promise((r) => out.toBlob(r, 'image/png'));
+      out.width = out.height = 0;
+      const d = new Date();
+      const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+      base = `BA_${safeName(state.title)}_${stamp}`;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setBusy(false);
+    }
+    if (!blob) {
+      setMsg('');
+      alert('圖片做不出來，可能是這台手機的記憶體不夠。請關掉其他 App 或分頁再按一次；還是不行就換電腦做。');
+      return;
+    }
     download(blob, `${base}.png`);
     rememberTreatment(state.title);
-    setMsg(`已匯出 ${base}.png`);
+    setMsg(`圖片已送出下載（${base}.png）。電腦在「下載」資料夾；手機請到「檔案」App 的「下載」找。`);
     render();
   }, { once: true });
 });
@@ -1213,6 +1308,7 @@ document.querySelectorAll('dialog').forEach((d) => d.addEventListener('cancel', 
   }
   $('#toolVer').textContent = `版本 ${TOOL_VERSION}`;
   refreshTreatmentList();
+  refreshMaskStatus();
   await checkFont();
   render();
 })();

@@ -14,6 +14,8 @@
   <p class="privacy" id="toolVer"></p>
 </header>
 
+<p class="line-warn" id="lineWarn" hidden>你現在是在 LINE 裡面打開的，做好的圖可能存不下來。請按右上角的「⋮」，選「用預設瀏覽器開啟」，改用 Safari 或 Chrome 打開。</p>
+
 <section class="notes">
   <h2>使用前請讀</h2>
   <ul>
@@ -25,6 +27,13 @@
 
 <main class="layout">
   <section class="stage">
+    <div class="mask-bar" id="maskBar" hidden>
+      <span>在預覽上拖框，框住要遮的地方，可以連續框好幾個。</span>
+      <span class="btn-row">
+        <button type="button" class="ghost" id="undoMaskBar">刪掉上一個框</button>
+        <button type="button" class="primary" id="doneMask">完成</button>
+      </span>
+    </div>
     <div class="canvas-wrap" id="canvasWrap">
       <canvas id="view" width="1197" height="1315" aria-label="BA 圖預覽"></canvas>
       <div class="drop-hint" id="dropHint">把 Before、After 照片拖進來</div>
@@ -43,11 +52,13 @@
         <label class="pick" id="pickBefore">
           <span>Before</span>
           <input type="file" accept="image/*" data-slot="before">
+          <span class="pick-btn">選照片</span>
           <small class="fname" data-fname="before">尚未選擇</small>
         </label>
         <label class="pick" id="pickAfter">
           <span>After</span>
           <input type="file" accept="image/*" data-slot="after">
+          <span class="pick-btn">選照片</span>
           <small class="fname" data-fname="after">尚未選擇</small>
         </label>
       </div>
@@ -72,16 +83,17 @@
 
     <div class="step">
       <h2>4. 白平衡</h2>
-      <p class="hint">工具會自動找照片裡本來是白色或灰色的地方（白牆、白衣、灰卡），把偏黃、偏藍調回正常色溫。找不到這種地方就維持原色，不會拿皮膚來調。</p>
+      <p class="hint">工具會自動找照片裡本來是白色或灰色的地方（白牆、白衣、灰卡），把偏黃、偏藍調回正常色溫。工具會盡量只用白色、灰色的地方來算，找不到就維持原色。</p>
       <p class="status"><strong>Before</strong>：<span data-wb-status="before">還沒放照片</span></p>
       <p class="status"><strong>After</strong>：<span data-wb-status="after">還沒放照片</span></p>
     </div>
 
     <div class="step">
       <h2>5. 遮蔽</h2>
-      <p class="hint">刺青、名牌、病歷文字、背景人物要遮起來時，按下面的按鈕，再到預覽上拖一個框。框裡會打上馬賽克，邊緣會自然淡出。</p>
+      <p class="hint">刺青、名牌、病歷文字、背景人物要遮起來時，按「新增遮蔽」，再到預覽上拖框，可以連續框好幾個，框完按「完成」。框裡會打上馬賽克，邊緣會自然淡出。</p>
       <div class="btn-row">
         <button type="button" id="addMask">新增遮蔽</button>
+        <button type="button" id="undoMask" class="ghost">刪掉上一個框</button>
         <button type="button" id="clearMasks" class="ghost">清除全部遮蔽</button>
       </div>
       <p class="status" id="maskStatus">沒有遮蔽</p>
@@ -93,7 +105,7 @@
         <button type="button" id="exportBtn" class="primary">按我匯出</button>
         <input type="file" id="projectInput" accept="application/json,.json" hidden>
       </div>
-      <p class="hint">按下去會先跳出檢查清單，勾完就會下載一張 PNG 圖片。</p>
+      <p class="hint">按下去會先跳出 5 項檢查，勾完就會下載一張 PNG 圖片。</p>
       <p class="warn" id="fontWarn"></p>
     </div>
 
@@ -115,6 +127,8 @@
 <dialog id="exportDialog">
   <form method="dialog">
     <h3>匯出前確認</h3>
+    <label><input type="checkbox" required> Before、After 沒有放反（術前在左、術後在右）</label>
+    <label><input type="checkbox" required> 兩張看起來一樣大、位置一樣，顏色沒有怪怪的</label>
     <label><input type="checkbox" required> 當事人書面同意書涵蓋這次的用途與刊登範圍</label>
     <label><input type="checkbox" required> 已檢查臉、刺青、名牌、病歷文字、背景人物，需要的都遮蔽了</label>
     <label><input type="checkbox" required> 了解 BA 圖不能用於醫療廣告，發布與否由診所自行判斷</label>
