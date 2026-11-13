@@ -1,14 +1,24 @@
 'use strict';
 // BA 圖製作：照片只在瀏覽器裡處理，不上傳。外框素材由 tools/build_frame.py 從範例圖產出。
 
-const SPEC = window.FRAME_SPEC;
-const W = SPEC.canvas[0];
-const H = SPEC.canvas[1];
-const SLOTS = SPEC.slots; // {before:[x,y,w,h], after:[...]}
-const SLOT_DX = SLOTS.after[0] - SLOTS.before[0];
+// 兩種輸出比例：post＝放貼文（3:4）、story＝放限動（9:16）。切換時下面這幾個值整組換掉
+const SPECS = window.FRAME_SPECS;
+const FORMAT_KEY = 'ba-tool-format';
+let FORMAT = 'post';
+let SPEC, W, H, SLOTS, SLOT_DX, VISIBLE_BOTTOM;
+function useSpec(key) {
+  FORMAT = SPECS[key] ? key : 'post';
+  SPEC = SPECS[FORMAT];
+  [W, H] = SPEC.canvas;
+  SLOTS = SPEC.slots; // {before:[x,y,w,h], after:[...]}
+  SLOT_DX = SLOTS.after[0] - SLOTS.before[0];
+  // 照片要填滿的範圍：格子頂端到淡出約九成的位置（再往下幾乎被白色蓋滿，露底也看不出來）
+  VISIBLE_BOTTOM = SPEC.fade[1] + 125;
+}
+useSpec(storageGet(FORMAT_KEY, 'post'));
 const WORK_MAX = 2400; // 操作時的工作尺寸；匯出一律用原圖重算
 const TREAT_KEY = 'ba-tool-treatments';
-const FRAME_ID = 'omni-lips-v1';
+const FRAME_ID = 'omni-lips-v2';
 const TOOL_VERSION = window.TOOL_VERSION || '未標版本';
 
 const PARTS = {
@@ -19,8 +29,6 @@ const PARTS = {
   arm: { pts: ['肩膀最外側骨頭（肩峰）', '肘尖'], alt: '拍不到時可改點肘尖、腕骨突起。' },
 };
 const SLOT_NAME = { before: 'Before', after: 'After' };
-// 照片要填滿的範圍：格子頂端到淡出約九成的位置（再往下幾乎被白色蓋滿，露底也看不出來）
-const VISIBLE_BOTTOM = SPEC.fade[1] + 125;
 const FIT_MAX = 6; // 自動填滿最多放大幾倍
 
 const $ = (sel) => document.querySelector(sel);
@@ -29,6 +37,7 @@ const vctx = view.getContext('2d');
 
 const state = {
   assets: {},
+  assetSets: {},
   photos: { before: null, after: null },
   title: '',
   part: 'lips',
@@ -86,6 +95,7 @@ function setBusy(on) {
   busyCount = Math.max(0, busyCount + (on ? 1 : -1));
   const b = $('#exportBtn');
   b.disabled = busyCount > 0;
+  document.querySelectorAll('input[name="format"]').forEach((r) => { r.disabled = busyCount > 0; });
   b.textContent = busyCount > 0 ? '處理中…' : '按我匯出';
 }
 
@@ -1209,7 +1219,7 @@ $('#exportBtn').addEventListener('click', async () => {
       out.width = out.height = 0;
       const d = new Date();
       const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
-      base = `BA_${safeName(state.title)}_${stamp}`;
+      base = `BA_${safeName(state.title)}_${SPEC.label.replace('放', '')}_${stamp}`;
     } catch (err) {
       console.error(err);
     } finally {
@@ -1291,17 +1301,36 @@ $('#projectInput').addEventListener('change', async (e) => {
 document.querySelectorAll('dialog [data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close('cancel')));
 document.querySelectorAll('dialog').forEach((d) => d.addEventListener('cancel', () => { d.returnValue = 'cancel'; }));
 
+// ---------- 放貼文／放限動 ----------
+const ASSET_FILES = ['frame-base', 'fade', 'divider', 'pill-before', 'pill-after'];
+const ASSET_NAMES = ['base', 'fade', 'divider', 'pillBefore', 'pillAfter'];
+
+function showFormat() {
+  document.querySelectorAll('input[name="format"]').forEach((r) => { r.checked = r.value === FORMAT; });
+  view.width = W;
+  view.height = H;
+  state.assets = state.assetSets[FORMAT];
+}
+
+// 換比例：外框整組換掉，照片從原圖在新的格子裡重新縮放、對齊、填滿；遮蔽框記在照片上，會跟著走
+function setFormat(key) {
+  if (busyCount > 0 || !SPECS[key] || key === FORMAT) { showFormat(); return; }
+  useSpec(key);
+  storageSet(FORMAT_KEY, FORMAT);
+  showFormat();
+  if (state.photos.before || state.photos.after) alignAndFit();
+  render();
+}
+document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListener('change', () => { if (r.checked) setFormat(r.value); }));
+
 // ---------- 啟動 ----------
 (async function init() {
   try {
-    const [base, fade, divider, pillBefore, pillAfter] = await Promise.all([
-      loadImage('assets/frame-base.png'),
-      loadImage('assets/fade.png'),
-      loadImage('assets/divider.png'),
-      loadImage('assets/pill-before.png'),
-      loadImage('assets/pill-after.png'),
-    ]);
-    state.assets = { base, fade, divider, pillBefore, pillAfter };
+    for (const key of Object.keys(SPECS)) {
+      const imgs = await Promise.all(ASSET_FILES.map((f) => loadImage(`assets/${key}/${f}.png`)));
+      state.assetSets[key] = Object.fromEntries(ASSET_NAMES.map((n, i) => [n, imgs[i]]));
+    }
+    showFormat();
   } catch (err) {
     setMsg(err.message);
     return;

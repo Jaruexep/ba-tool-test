@@ -105,6 +105,20 @@ input[type="text"], select {
   background: var(--bg);
   color: var(--ink);
 }
+/* 放貼文／放限動：兩顆並排，選到的那顆實心 */
+.format-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 4px; }
+.format { position: relative; cursor: pointer; }
+.format input { position: absolute; opacity: 0; pointer-events: none; }
+.format span {
+  display: flex; align-items: baseline; justify-content: center; gap: 6px;
+  padding: 9px 8px; border-radius: 8px;
+  border: 1px solid var(--accent); color: var(--accent);
+  font-size: 15px; font-weight: 600;
+}
+.format small { font-weight: 400; font-size: 12px; }
+.format input:checked + span { background: var(--accent); color: var(--accent-ink); }
+.format input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.format input:disabled + span { opacity: 0.5; cursor: wait; }
 .pick-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
 .pick {
   display: flex; flex-direction: column; gap: 4px;

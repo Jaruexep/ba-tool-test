@@ -35,7 +35,7 @@
       </span>
     </div>
     <div class="canvas-wrap" id="canvasWrap">
-      <canvas id="view" width="1197" height="1315" aria-label="BA 圖預覽"></canvas>
+      <canvas id="view" width="1197" height="1596" aria-label="BA 圖預覽"></canvas>
       <div class="drop-hint" id="dropHint">把照片拖進來，或按下面的「選照片」</div>
     </div>
     <div class="stage-tools">
@@ -48,6 +48,11 @@
   <aside class="panel">
     <div class="step">
       <h2>1. 照片</h2>
+      <div class="format-row" role="radiogroup" aria-label="要放在哪裡">
+        <label class="format"><input type="radio" name="format" value="post" checked><span>放貼文<small>3:4</small></span></label>
+        <label class="format"><input type="radio" name="format" value="story"><span>放限動<small>9:16</small></span></label>
+      </div>
+      <p class="hint">選要放 IG 貼文還是限動，圖片就會是剛好的比例，上傳不會被裁掉。照片放進來以後再換也可以，工具會自動重新擺好。</p>
       <div class="pick-row">
         <label class="pick" id="pickBefore">
           <span>Before</span>
