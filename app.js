@@ -8,7 +8,7 @@ const SLOTS = SPEC.slots; // {before:[x,y,w,h], after:[...]}
 const SLOT_DX = SLOTS.after[0] - SLOTS.before[0];
 const WORK_MAX = 2400; // 操作時的工作尺寸；匯出一律用原圖重算
 const TREAT_KEY = 'ba-tool-treatments';
-const FRAME_ID = 'lithe-lips-v1';
+const FRAME_ID = 'omni-lips-v1';
 const TOOL_VERSION = window.TOOL_VERSION || '未標版本';
 
 const PARTS = {
