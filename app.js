@@ -1323,6 +1323,23 @@ function setFormat(key) {
 }
 document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListener('change', () => { if (r.checked) setFormat(r.value); }));
 
+// ---------- 沒網路也能用 ----------
+// 網站版第一次打開時，把整個工具（程式、外框、字型）存進這台裝置；之後沒網路也打得開。
+// 單一檔案版（file://）本來就不用網路，不做這件事。存的內容照版本分開，發新版後有網路打開一次就會換新。
+function setupOffline() {
+  const note = $('#offlineNote');
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  const show = (text) => { note.textContent = text; note.hidden = false; };
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController) show('有新版本已經下載好，重新整理頁面就會換成新版。');
+  });
+  navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(async () => {
+    const ok = await caches.has(`ba-${TOOL_VERSION}`);
+    if (ok) show('已存進這台裝置，沒有網路也能用。');
+  }).catch((err) => console.warn('離線功能沒有開成', err));
+}
+
 // ---------- 啟動 ----------
 (async function init() {
   try {
@@ -1336,6 +1353,7 @@ document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListe
     return;
   }
   $('#toolVer').textContent = `版本 ${TOOL_VERSION}`;
+  setupOffline();
   refreshTreatmentList();
   refreshMaskStatus();
   await checkFont();

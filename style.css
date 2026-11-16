@@ -32,6 +32,7 @@ body {
 .top { padding: 14px 20px 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
 .top h1 { font-size: 20px; margin: 0; }
 .privacy { margin: 0; color: var(--muted); font-size: 13px; }
+.privacy.offline { color: var(--ok); }
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
