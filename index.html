@@ -71,7 +71,13 @@
           <small class="fname" data-fname="after">尚未選擇</small>
         </label>
       </div>
-      <p class="hint">照片放進來會自動填滿格子，位置和大小不用自己調。</p>
+      <div class="btn-row photo-fix">
+        <button type="button" class="ghost" id="swapPhotos">Before、After 對調</button>
+        <button type="button" class="ghost" data-remove="before">移除 Before</button>
+        <button type="button" class="ghost" data-remove="after">移除 After</button>
+      </div>
+      <p class="hint">照片放進來會自動填滿格子，位置和大小不用自己調。放錯格子按「對調」，選錯照片按「移除」再重選。</p>
+      <p class="warn" id="orderWarn"></p>
       <p class="warn" id="coverWarn"></p>
     </div>
 
@@ -130,6 +136,15 @@
       <button type="button" class="ghost" data-close>之後再填</button>
       <button value="ok" class="primary">確定</button>
     </menu>
+  </form>
+</dialog>
+
+<dialog id="slotDialog">
+  <form method="dialog">
+    <h3 id="slotTitle">這張是術前還是術後？</h3>
+    <p class="hint" id="slotHint"></p>
+    <div class="slot-thumbs" id="slotThumbs"></div>
+    <menu id="slotMenu"></menu>
   </form>
 </dialog>
 

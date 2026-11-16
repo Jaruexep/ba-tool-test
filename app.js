@@ -96,6 +96,7 @@ function setBusy(on) {
   const b = $('#exportBtn');
   b.disabled = busyCount > 0;
   document.querySelectorAll('input[name="format"]').forEach((r) => { r.disabled = busyCount > 0; });
+  if (typeof refreshPhotoTools === 'function' && $('#swapPhotos')) refreshPhotoTools();
   b.textContent = busyCount > 0 ? '處理中…' : '按我匯出';
 }
 
@@ -171,6 +172,7 @@ async function loadPhoto(slot, file, opts = {}) {
   work.getContext('2d').drawImage(bitmap, 0, 0, work.width, work.height);
   const photo = {
     name: file.name,
+    time: file.lastModified || 0,
     hash,
     bitmap,
     work,
@@ -908,6 +910,7 @@ function render() {
     compose(vctx);
     drawOverlays(vctx);
     $('#dropHint').hidden = Boolean(state.photos.before || state.photos.after);
+    refreshPhotoTools();
     const gaps = uncoveredSlots();
     $('#coverWarn').textContent = gaps.length
       ? `${gaps.map((s) => SLOT_NAME[s]).join('、')} 照片沒有填滿格子，邊緣會露出底色。兩張照片拍的範圍差太多，建議換一張拍得比較接近的照片。`
@@ -1102,11 +1105,165 @@ wrap.addEventListener('drop', (e) => {
   e.preventDefault();
   wrap.classList.remove('dragover');
   const pt = toCanvas(e);
-  const prefer = e.dataTransfer.files.length === 1 ? (pt.re < W / 2 ? 'before' : 'after') : null;
-  handleFiles(e.dataTransfer.files, prefer);
+  askAndPlace(e.dataTransfer.files, pt.re < W / 2 ? 'before' : 'after');
 });
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
+
+// ---------- 照片防呆 ----------
+// 拖進來的照片先問放哪一格：一張就問術前還是術後，兩張就照檔案時間排（早的當術前）讓使用者確認或對調。
+// 按 Before／After 各自的「選照片」已經指定好格子，不再問。
+const fmtTime = (ms) => {
+  if (!ms) return '不知道拍攝時間';
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+function askSlot({ title, hint, files, labels, buttons }) {
+  const dlg = $('#slotDialog');
+  const urls = [];
+  const drawThumbs = (list, caps) => {
+    urls.forEach((u) => URL.revokeObjectURL(u));
+    urls.length = 0;
+    $('#slotThumbs').innerHTML = '';
+    list.forEach((f, i) => {
+      const u = URL.createObjectURL(f);
+      urls.push(u);
+      const fig = document.createElement('figure');
+      const img = document.createElement('img');
+      img.alt = f.name;
+      img.src = u;
+      img.onerror = () => { img.replaceWith(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（這種格式這裡看不到預覽）' })); };
+      const cap = document.createElement('figcaption');
+      cap.textContent = `${f.name}｜${fmtTime(f.lastModified)}`;
+      if (caps && caps[i]) cap.prepend(Object.assign(document.createElement('strong'), { textContent: caps[i] }));
+      fig.append(img, cap);
+      $('#slotThumbs').append(fig);
+    });
+  };
+  $('#slotTitle').textContent = title;
+  $('#slotHint').textContent = hint || '';
+  drawThumbs(files, labels);
+  const menu = $('#slotMenu');
+  menu.innerHTML = '';
+  return new Promise((resolve) => {
+    for (const b of buttons) {
+      const btn = document.createElement('button');
+      btn.type = b.value === 'cancel' || b.onClick ? 'button' : 'submit';
+      btn.value = b.value;
+      btn.textContent = b.text;
+      btn.className = b.primary ? 'primary' : 'ghost';
+      btn.dataset.slotChoice = b.value;
+      if (b.value === 'cancel') btn.addEventListener('click', () => dlg.close('cancel'));
+      if (b.onClick) btn.addEventListener('click', () => b.onClick(drawThumbs));
+      menu.append(btn);
+    }
+    dlg.returnValue = '';
+    dlg.addEventListener('close', () => { urls.forEach((u) => URL.revokeObjectURL(u)); resolve(dlg.returnValue || 'cancel'); }, { once: true });
+    dlg.showModal();
+  });
+}
+
+async function askAndPlace(files, hintSlot) {
+  if (busyCount > 0) return;
+  const imgs = [...files].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
+  if (!imgs.length) return;
+  if (imgs.length === 1) {
+    const f = imgs[0];
+    const guess = !state.photos.before ? 'before' : !state.photos.after ? 'after' : hintSlot;
+    const replacing = ['before', 'after'].filter((s) => state.photos[s]).map((s) => `${SLOT_NAME[s]} 已經有照片，選它會換掉。`).join('');
+    const choice = await askSlot({
+      title: '這張是術前（Before）還是術後（After）？',
+      hint: replacing,
+      files: [f],
+      buttons: [
+        { value: 'cancel', text: '取消' },
+        { value: 'after', text: '術後 After', primary: guess === 'after' },
+        { value: 'before', text: '術前 Before', primary: guess === 'before' },
+      ],
+    });
+    if (choice === 'before' || choice === 'after') await handleFiles([f], choice);
+    return;
+  }
+  // 兩張以上：只用前兩張，照檔案時間排，早的當術前
+  let pair = imgs.slice(0, 2).sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+  const extra = imgs.length > 2 ? `一次拖了 ${imgs.length} 張，只會用前兩張。` : '';
+  const choice = await askSlot({
+    title: '這樣放對嗎？',
+    hint: `${extra}照檔案時間排好了，比較早的當術前。放反了按「左右對調」。`,
+    files: pair,
+    labels: ['術前 Before', '術後 After'],
+    buttons: [
+      { value: 'cancel', text: '取消' },
+      { value: 'swap', text: '左右對調', onClick: (redraw) => { pair = [pair[1], pair[0]]; redraw(pair, ['術前 Before', '術後 After']); } },
+      { value: 'ok', text: '對，放進去', primary: true },
+    ],
+  });
+  if (choice === 'ok') await handleFiles(pair, null);
+}
+
+// Before 的檔案時間比 After 晚一分鐘以上，提醒可能放反（只提醒，不擋）
+function orderSuspect() {
+  const B = state.photos.before, A = state.photos.after;
+  return Boolean(B && A && B.time && A.time && B.time - A.time > 60000);
+}
+function refreshPhotoTools() {
+  const B = state.photos.before, A = state.photos.after;
+  $('#swapPhotos').disabled = busyCount > 0 || !(B || A);
+  document.querySelectorAll('[data-remove]').forEach((b) => { b.disabled = busyCount > 0 || !state.photos[b.dataset.remove]; });
+  $('#orderWarn').textContent = orderSuspect()
+    ? `Before 這張的檔案時間（${fmtTime(B.time)}）比 After（${fmtTime(A.time)}）晚，是不是放反了？放反了按「Before、After 對調」；確定沒放反就不用理它。`
+    : '';
+}
+
+function showSlotInfo(slot) {
+  const p = state.photos[slot];
+  document.querySelector(`[data-fname="${slot}"]`).textContent = p ? p.name : '尚未選擇';
+  if (p) setWBStatus(slot, p.wb.note, p.wb.gains.some((g) => g !== 1));
+  else setWBStatus(slot, '還沒放照片');
+}
+
+async function swapPhotos() {
+  if (busyCount > 0) return;
+  setMode(null);
+  ++loadSeq.before; ++loadSeq.after; // 讀到一半的照片作廢，免得對調後又被蓋掉
+  const { before, after } = state.photos;
+  state.photos.before = after;
+  state.photos.after = before;
+  for (const m of state.masks) m.slot = m.slot === 'before' ? 'after' : 'before';
+  for (const slot of ['before', 'after']) {
+    const p = state.photos[slot];
+    if (p) { p.points = []; p.t = coverTransform(slot, p.bitmap.width, p.bitmap.height); }
+    showSlotInfo(slot);
+  }
+  state.aligned = false;
+  setBusy(true);
+  try { await autoAlign(); } finally { setBusy(false); }
+  setMsg('Before、After 已經對調，重新對齊好了');
+  render();
+}
+
+function removePhoto(slot) {
+  if (busyCount > 0 || !state.photos[slot]) return;
+  setMode(null);
+  ++loadSeq[slot];
+  releasePhoto(state.photos[slot]);
+  state.photos[slot] = null;
+  state.masks = state.masks.filter((m) => m.slot !== slot);
+  refreshMaskStatus();
+  const other = state.photos[slot === 'before' ? 'after' : 'before'];
+  if (other) other.points = [];
+  state.aligned = false;
+  state.autoAlign = null;
+  alignAndFit();
+  showSlotInfo(slot);
+  setMsg(`已移除 ${SLOT_NAME[slot]} 照片，可以重新選一張`);
+  refreshPhotoTools();
+  render();
+}
+
+$('#swapPhotos').addEventListener('click', swapPhotos);
+document.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => removePhoto(b.dataset.remove)));
 
 // ---------- 面板按鈕 ----------
 $('#treatment').addEventListener('change', (e) => setTitle(e.target.value));
@@ -1197,6 +1354,7 @@ $('#exportBtn').addEventListener('click', async () => {
   await checkFont();
   if (!state.fontOk) problems.push('標題字型沒有載入成功');
   if (problems.length) { alert(`還不能匯出：\n・${problems.join('\n・')}`); return; }
+  if (orderSuspect() && !confirm('Before 這張的檔案時間比 After 晚，看起來可能放反了。確定 Before、After 沒有放反，要照這樣匯出嗎？')) return;
   const gaps = uncoveredSlots();
   if (gaps.length && !confirm(`${gaps.map((s) => SLOT_NAME[s]).join('、')} 照片沒有填滿格子，匯出的圖邊緣會露出底色。確定照這樣匯出嗎？`)) return;
   const dlg = $('#exportDialog');
