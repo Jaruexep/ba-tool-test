@@ -172,6 +172,7 @@ async function loadPhoto(slot, file, opts = {}) {
   work.getContext('2d').drawImage(bitmap, 0, 0, work.width, work.height);
   const photo = {
     name: file.name,
+    file,
     time: file.lastModified || 0,
     hash,
     bitmap,
@@ -1210,6 +1211,7 @@ function orderSuspect() {
 function refreshPhotoTools() {
   const B = state.photos.before, A = state.photos.after;
   $('#swapPhotos').disabled = busyCount > 0 || !(B || A);
+  $('#rearrangePhotos').disabled = busyCount > 0 || !(B || A);
   document.querySelectorAll('[data-remove]').forEach((b) => { b.disabled = busyCount > 0 || !state.photos[b.dataset.remove]; });
   $('#orderWarn').textContent = orderSuspect()
     ? `Before 這張的檔案時間（${fmtTime(B.time)}）比 After（${fmtTime(A.time)}）晚，是不是放反了？放反了按「Before、After 對調」；確定沒放反就不用理它。`
@@ -1262,6 +1264,45 @@ function removePhoto(slot) {
   render();
 }
 
+// 重新擺放：把目前放好的照片秀出來重新確認一次，放反了在視窗裡對調
+async function rearrangePhotos() {
+  if (busyCount > 0) return;
+  const B = state.photos.before, A = state.photos.after;
+  if (!B && !A) return;
+  setMode(null);
+  if (B && A) {
+    let flipped = false;
+    const labels = ['術前 Before', '術後 After'];
+    const choice = await askSlot({
+      title: '重新確認：這樣放對嗎？',
+      hint: '左邊會放術前、右邊放術後。放反了按「左右對調」，再按「對，就這樣」。',
+      files: [B.file, A.file],
+      labels,
+      buttons: [
+        { value: 'cancel', text: '取消' },
+        { value: 'swap', text: '左右對調', onClick: (redraw) => { flipped = !flipped; redraw(flipped ? [A.file, B.file] : [B.file, A.file], labels); } },
+        { value: 'ok', text: '對，就這樣', primary: true },
+      ],
+    });
+    if (choice === 'ok' && flipped) await swapPhotos();
+    else if (choice === 'ok') setMsg('確認過了，Before、After 沒有放反');
+    return;
+  }
+  const slot = B ? 'before' : 'after';
+  const choice = await askSlot({
+    title: '重新確認：這張是術前還是術後？',
+    hint: `現在放在 ${SLOT_NAME[slot]}。`,
+    files: [state.photos[slot].file],
+    buttons: [
+      { value: 'cancel', text: '取消' },
+      { value: 'after', text: '術後 After', primary: slot === 'after' },
+      { value: 'before', text: '術前 Before', primary: slot === 'before' },
+    ],
+  });
+  if ((choice === 'before' || choice === 'after') && choice !== slot) await swapPhotos();
+}
+
+$('#rearrangePhotos').addEventListener('click', rearrangePhotos);
 $('#swapPhotos').addEventListener('click', swapPhotos);
 document.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', () => removePhoto(b.dataset.remove)));
 
