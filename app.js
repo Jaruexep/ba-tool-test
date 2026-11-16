@@ -49,6 +49,7 @@ const state = {
   fontOk: false,
   drag: null,
   fitNote: '',
+  shortOK: new Set(), // 使用者按過「沒辦法重拍」的照片（存雜湊）
   autoAlign: null,
 };
 
@@ -130,6 +131,131 @@ function coverTransform(slot, iw, ih) {
   return { a: c(s, 0), b: c(x + w / 2 - (s * iw) / 2, y + h / 2 - (s * ih) / 2) };
 }
 
+// 照片外圍完全同色的邊框（截圖留白、照片貼在灰底上）不算畫面：找出真正有畫面的範圍，原圖座標的凸多邊形。
+// 只有平到幾乎沒有明暗變化的邊才當邊框，一般照片裡的白牆有明暗，不會被誤判。
+const BORDER_TOL = 5; // 邊框內顏色跟邊框色最多差幾
+const BORDER_SIDE = 0.97; // 一條邊要有幾成像素是邊框色才算邊框
+function convexHull(pts) {
+  const P = [...pts].sort((a, b) => a.re - b.re || a.im - b.im);
+  if (P.length < 3) return P;
+  const cross = (o, a, b) => (a.re - o.re) * (b.im - o.im) - (a.im - o.im) * (b.re - o.re);
+  const lo = [], hi = [];
+  for (const q of P) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = P.length - 1; i >= 0; i--) { const q = P[i]; while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], q) <= 0) hi.pop(); hi.push(q); }
+  return lo.slice(0, -1).concat(hi.slice(0, -1));
+}
+function contentRegion(bitmap, work) {
+  const W0 = bitmap.width, H0 = bitmap.height;
+  const full = { full: true, pts: [c(0, 0), c(W0, 0), c(W0, H0), c(0, H0)] };
+  const k = Math.min(1, 240 / Math.max(work.width, work.height));
+  const w = Math.max(8, Math.round(work.width * k)), h = Math.max(8, Math.round(work.height * k));
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const g = cv.getContext('2d');
+  g.drawImage(work, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const at = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+  const sides = [
+    Array.from({ length: w }, (_, x) => at(x, 0)), Array.from({ length: w }, (_, x) => at(x, h - 1)),
+    Array.from({ length: h }, (_, y) => at(0, y)), Array.from({ length: h }, (_, y) => at(w - 1, y)),
+  ];
+  const median = (arr) => [0, 1, 2].map((ch) => arr.map((q) => q[ch]).sort((a, b) => a - b)[arr.length >> 1]);
+  const near = (q, m) => Math.max(Math.abs(q[0] - m[0]), Math.abs(q[1] - m[1]), Math.abs(q[2] - m[2])) <= BORDER_TOL;
+  const flat = sides.filter((s) => { const m = median(s); return s.filter((q) => near(q, m)).length >= s.length * BORDER_SIDE; });
+  if (!flat.length) return full;
+  const m = median(flat.flat());
+  const pts = [];
+  const minRun = Math.max(3, Math.round(w * 0.02));
+  for (let y = 0; y < h; y++) {
+    let x0 = -1, x1 = -1, n = 0;
+    for (let x = 0; x < w; x++) if (!near(at(x, y), m)) { n++; if (x0 < 0) x0 = x; x1 = x; }
+    if (n >= minRun) pts.push(c(x0, y), c(x1 + 1, y), c(x0, y + 1), c(x1 + 1, y + 1));
+  }
+  if (pts.length < 8) return full;
+  const hull = convexHull(pts);
+  const area = hull.reduce((s, q, i) => { const r = hull[(i + 1) % hull.length]; return s + q.re * r.im - r.re * q.im; }, 0) / 2;
+  if (Math.abs(area) > w * h * 0.985) return full;
+  // 換回原圖座標，再往內縮一點，避開邊緣反鋸齒那一圈
+  const sx = W0 / w, sy = H0 / h;
+  const cx = hull.reduce((s, q) => s + q.re, 0) / hull.length, cy = hull.reduce((s, q) => s + q.im, 0) / hull.length;
+  const inset = 1.5;
+  const out = hull.map((q) => {
+    const dx = q.re - cx, dy = q.im - cy, L = Math.hypot(dx, dy) || 1;
+    const r = Math.max(0, L - inset) / L;
+    return c((cx + dx * r) * sx, (cy + dy * r) * sy);
+  });
+  return { full: false, pts: out };
+}
+function halvesOf(pts) {
+  const cx = pts.reduce((s, q) => s + q.re, 0) / pts.length;
+  const cy = pts.reduce((s, q) => s + q.im, 0) / pts.length;
+  return pts.map((P, i) => {
+    const Q = pts[(i + 1) % pts.length];
+    let n = c(Q.im - P.im, P.re - Q.re);
+    let k = n.re * P.re + n.im * P.im;
+    if (n.re * cx + n.im * cy > k) { n = c(-n.re, -n.im); k = -k; }
+    return { n, k };
+  });
+}
+// 放大填滿最多只能裁掉照片每一邊的一成（使用者規定）：照片中間 80% 的範圍一定要留在格子看得到的地方。
+// 範圍不夠時就不再放大，格子裡空出來的地方用同一張照片模糊延伸補滿。
+const CROP_MAX = 0.1;
+function regionBox(region) {
+  const xs = region.pts.map((q) => q.re), ys = region.pts.map((q) => q.im);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+}
+function photoRegion(p) {
+  return p.region || { full: true, pts: [c(0, 0), c(p.bitmap.width, 0), c(p.bitmap.width, p.bitmap.height), c(0, p.bitmap.height)] };
+}
+// 照片中間 80% 有沒有被裁到（格子看得到的範圍：左右整格、上到照片格頂、下到淡出開始前）
+function cropsTooMuch(slot, region, t) {
+  const B = regionBox(region);
+  const mx = B.w * CROP_MAX, my = B.h * CROP_MAX;
+  const [sx, sy, sw] = SLOTS[slot];
+  return [c(B.x0 + mx, B.y0 + my), c(B.x1 - mx, B.y0 + my), c(B.x1 - mx, B.y1 - my), c(B.x0 + mx, B.y1 - my)]
+    .map((z) => applyT(t, z))
+    .some((q) => q.re < sx - 0.5 || q.re > sx + sw + 0.5 || q.im < sy - 0.5 || q.im > VISIBLE_BOTTOM + 0.5);
+}
+function cropTooMuchSlots() {
+  return ['before', 'after'].filter((s) => state.photos[s] && cropsTooMuch(s, photoRegion(state.photos[s]), state.photos[s].t));
+}
+// 單張照片：最小的放大倍數讓格子整個落在畫面範圍裡，位置盡量置中；這樣會裁超過一成，就改成每邊最多裁一成、置中
+function coverPhoto(slot, bitmap, region) {
+  region = region || { full: true, pts: [c(0, 0), c(bitmap.width, 0), c(bitmap.width, bitmap.height), c(0, bitmap.height)] };
+  const t = coverFill(slot, bitmap, region);
+  if (!cropsTooMuch(slot, region, t)) return t;
+  const [x, y, w] = SLOTS[slot];
+  const vh = VISIBLE_BOTTOM - y;
+  const B = regionBox(region);
+  const s = Math.min(cAbs(t.a), w / (B.w * (1 - 2 * CROP_MAX)), vh / (B.h * (1 - 2 * CROP_MAX)));
+  return { a: c(s, 0), b: c(x + w / 2 - s * B.cx, y + vh / 2 - s * B.cy) };
+}
+function coverFill(slot, bitmap, region) {
+  if (!region || region.full) return coverTransform(slot, bitmap.width, bitmap.height);
+  const [x, y, w, h] = SLOTS[slot];
+  const H = halvesOf(region.pts);
+  const xs = region.pts.map((q) => q.re), ys = region.pts.map((q) => q.im);
+  const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+  const shifted = (s) => H.map((q) => ({ n: q.n, k: q.k - Math.max(0, q.n.re * (w / s)) - Math.max(0, q.n.im * (h / s)) }));
+  const feasible = (s) => {
+    let poly = [c(-1e7, -1e7), c(1e7, -1e7), c(1e7, 1e7), c(-1e7, 1e7)];
+    for (const q of shifted(s)) { poly = clipHalf(poly, q.n, q.k); if (!poly.length) return null; }
+    return poly;
+  };
+  let s = Math.max(w / bw, h / bh);
+  if (!feasible(s)) {
+    let lo = s, hi = s * FIT_MAX * 4;
+    if (!feasible(hi)) return coverTransform(slot, bitmap.width, bitmap.height);
+    for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (feasible(mid)) hi = mid; else lo = mid; }
+    s = hi;
+  }
+  const cx = xs.reduce((a, b) => a + b, 0) / xs.length, cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const p = nearestInPoly(feasible(s), shifted(s), c(cx - w / s / 2, cy - h / s / 2));
+  return { a: c(s, 0), b: c(x - s * p.re, y - s * p.im) };
+}
+
 const PHOTO_MAX = 4000;
 function releasePhoto(p) {
   if (!p) return;
@@ -178,13 +304,15 @@ async function loadPhoto(slot, file, opts = {}) {
     bitmap,
     work,
     k,
-    t: coverTransform(slot, bitmap.width, bitmap.height),
+    region: contentRegion(bitmap, work),
+    t: null,
     baseS: 0,
     points: [],
     manual: false,
     wb: { gains: [1, 1, 1], pending: null, preview: false, note: '原色', source: null },
     cache: null,
   };
+  photo.t = coverPhoto(slot, bitmap, photo.region);
   photo.baseS = cAbs(photo.t.a);
   if (opts.expectHash && opts.expectHash !== hash) return { mismatch: true, photo };
   if (opts.dryRun) return { photo };
@@ -394,7 +522,7 @@ function fitAligned() {
   const B = state.photos.before;
   const A = state.photos.after;
   const off = c(SLOT_DX, 0);
-  const s0 = B.t.a.re; // Before 此時是填滿格子的初始擺法，沒有旋轉
+  const s0 = B.t.a.re; // Before 此時是填滿格子的初始擺法（已避開邊框），沒有旋轉
   // R：After 原圖座標 → Before 原圖座標（只看參考點，跟 Before 怎麼縮放無關）
   const R = { a: cDiv(A.t.a, B.t.a), b: cDiv(cSub(cSub(A.t.b, off), B.t.b), B.t.a) };
   const [sx, sy, sw] = SLOTS.before;
@@ -415,8 +543,9 @@ function fitAligned() {
     }
   };
   const bw = B.bitmap.width, bh = B.bitmap.height, aw = A.bitmap.width, ah = A.bitmap.height;
-  addPoly([c(0, 0), c(bw, 0), c(bw, bh), c(0, bh)], sw);
-  addPoly([c(0, 0), c(aw, 0), c(aw, ah), c(0, ah)].map((z) => applyT(R, z)), swA);
+  // 只算真正有畫面的範圍：照片外圍的單色邊框不能露進格子
+  addPoly(B.region ? B.region.pts : [c(0, 0), c(bw, 0), c(bw, bh), c(0, bh)], sw);
+  addPoly((A.region ? A.region.pts : [c(0, 0), c(aw, 0), c(aw, ah), c(0, ah)]).map((z) => applyT(R, z)), swA);
   // 縮放 s 時，格子在 Before 原圖上是 (寬/s)×(vh/s) 的長方形；左上角 p 要讓四個角都在共同範圍裡
   const shifted = (s) => halves.map((h) => ({
     n: h.n,
@@ -445,22 +574,37 @@ function fitAligned() {
   const p0 = cDiv(cSub(Q0, b0), c(s, 0));
   const p = nearestInPoly(poly, shifted(s), p0);
   const b = cSub(Q0, cMul(c(s, 0), p));
-  B.t = { a: c(s, 0), b };
-  A.t = { a: cMul(c(s, 0), R.a), b: cAdd(cAdd(cMul(c(s, 0), R.b), b), off) };
-  return { ok: true, zoom: s / s0 };
+  const place = (s, b) => {
+    B.t = { a: c(s, 0), b };
+    A.t = { a: cMul(c(s, 0), R.a), b: cAdd(cAdd(cMul(c(s, 0), R.b), b), off) };
+  };
+  place(s, b);
+  const tooMuch = () => cropsTooMuch('before', photoRegion(B), B.t) || cropsTooMuch('after', photoRegion(A), A.t);
+  if (!tooMuch()) return { ok: true, zoom: s / s0 };
+  // 填滿會裁超過一成：縮小到兩張中間 80% 都看得到為止，以兩張照片畫面中心的中點置中，空位用模糊延伸補
+  const cB = regionBox(photoRegion(B)), cA = regionBox(photoRegion(A));
+  const mB = cMul(cAdd(c(cB.cx, cB.cy), applyT(R, c(cA.cx, cA.cy))), c(0.5, 0));
+  const center = c(sx + sw / 2, sy + vh / 2);
+  const at = (z) => { place(z, cSub(center, cMul(c(z, 0), mB))); return !tooMuch(); };
+  let lo = s / 20, hi = s;
+  if (!at(lo)) { at(lo); return { ok: true, zoom: lo / s0, short: true }; }
+  for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (at(mid)) lo = mid; else hi = mid; }
+  at(lo);
+  return { ok: true, zoom: lo / s0, short: true };
 }
 
 // 新照片、點完參考點、清除參考點都走這裡：從填滿格子的初始擺法重算，結果只跟照片和參考點有關
 function alignAndFit() {
   for (const slot of ['before', 'after']) {
     const p = state.photos[slot];
-    if (p) p.t = coverTransform(slot, p.bitmap.width, p.bitmap.height);
+    if (p) p.t = coverPhoto(slot, p.bitmap, p.region);
   }
   state.fitNote = '';
   tryAlign();
   if (!state.aligned) return;
   const r = fitAligned();
   if (!r.ok) state.fitNote = `兩張照片拍的範圍差太多，自動放大到 ${FIT_MAX} 倍還是填不滿格子，建議換一張拍得比較接近的照片。`;
+  else if (r.short) state.fitNote = '照片範圍不夠，放大填滿會裁到部位，所以每一邊最多只裁一成，不夠的地方用同一張照片模糊延伸補滿。';
   else if (r.zoom > 1.001) state.fitNote = `為了讓兩張都填滿格子，已自動放大 ${r.zoom.toFixed(2)} 倍。`;
   writeAlignStatus();
 }
@@ -727,9 +871,108 @@ function drawPhoto(ctx, slot, photo, source, scaleFromSource, extraOffset = 0, a
   ctx.clip();
   ctx.globalAlpha = alpha;
   ctx.transform(t.a.re, t.a.im, -t.a.im, t.a.re, t.b.re - extraOffset, t.b.im);
+  // 照片外圍的單色邊框不畫：只畫真正有畫面的範圍
+  if (photo.region && !photo.region.full) {
+    ctx.beginPath();
+    photo.region.pts.forEach((q, i) => (i ? ctx.lineTo(q.re, q.im) : ctx.moveTo(q.re, q.im)));
+    ctx.closePath();
+    ctx.clip();
+  }
   ctx.scale(scaleFromSource, scaleFromSource);
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(source, 0, 0);
+  ctx.restore();
+}
+
+// 模糊延伸：照片範圍不夠蓋滿格子時，把照片最外圈那一條畫面往外拉長、糊開，補滿格子裡的空位；
+// 照片自己的邊緣再往內淡出一小段，跟補出來的部分融在一起，看不到一條硬邊。
+// 模糊用「縮小再放大」，不用 canvas 的 filter（舊 iPhone 不支援），各瀏覽器結果固定。
+const EXTEND_STRIP = 0.06; // 拿照片邊緣多寬的一條來拉長（佔照片格高度）
+const EXTEND_FEATHER = 0.07; // 照片邊緣往內淡出多少（佔照片格高度）
+function newCanvas(w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w));
+  cv.height = Math.max(1, Math.round(h));
+  return cv;
+}
+function drawExtended(ctx, slot, photo, source, scaleFromSource, t) {
+  const [sx, sy, sw, sh] = SLOTS[slot];
+  const W2 = Math.ceil(sw), H2 = Math.ceil(sh);
+  // 1. 照片本身（只有真正的畫面）先畫在格子大小的畫布上
+  const base = newCanvas(W2, H2);
+  const bg = base.getContext('2d');
+  bg.translate(-sx, -sy);
+  drawPhoto(bg, slot, photo, source, scaleFromSource, 0, 1, t);
+  bg.setTransform(1, 0, 0, 1, 0, 0);
+  // 2. 找出照片完整蓋住的那一塊（縮小來量，快）
+  const q = 4;
+  const sm = newCanvas(W2 / q, H2 / q);
+  sm.getContext('2d').drawImage(base, 0, 0, sm.width, sm.height);
+  const a = sm.getContext('2d').getImageData(0, 0, sm.width, sm.height).data;
+  const op = (x, y) => a[(y * sm.width + x) * 4 + 3] > 250;
+  const rowFull = (y, x0, x1) => { for (let x = x0; x <= x1; x++) if (!op(x, y)) return false; return true; };
+  const colFull = (x, y0, y1) => { for (let y = y0; y <= y1; y++) if (!op(x, y)) return false; return true; };
+  const cx = sm.width >> 1, cy = sm.height >> 1;
+  let L = cx, R = cx, T = cy, B = cy;
+  for (let grew = true; grew;) {
+    grew = false;
+    if (T > 0 && rowFull(T - 1, L, R)) { T--; grew = true; }
+    if (B < sm.height - 1 && rowFull(B + 1, L, R)) { B++; grew = true; }
+    if (L > 0 && colFull(L - 1, T, B)) { L--; grew = true; }
+    if (R < sm.width - 1 && colFull(R + 1, T, B)) { R++; grew = true; }
+  }
+  const iL = L === 0 ? 0 : (L + 1) * q, iT = T === 0 ? 0 : (T + 1) * q;
+  const iR = R === sm.width - 1 ? W2 : R * q, iB = B === sm.height - 1 ? H2 : B * q;
+  const iw = iR - iL, ih = iB - iT;
+  if (iw < 8 || ih < 8) { ctx.drawImage(base, sx, sy); return; }
+  // 3. 邊緣那一條往外拉長
+  const st = Math.max(4, Math.round(sh * EXTEND_STRIP));
+  const ext = newCanvas(W2, H2);
+  const eg = ext.getContext('2d');
+  eg.imageSmoothingEnabled = true;
+  if (iL > 0) eg.drawImage(base, iL, iT, Math.min(st, iw), ih, 0, iT, iL + Math.min(st, iw), ih);
+  if (iR < W2) eg.drawImage(base, iR - Math.min(st, iw), iT, Math.min(st, iw), ih, iR - Math.min(st, iw), iT, W2 - iR + Math.min(st, iw), ih);
+  eg.drawImage(base, iL, iT, iw, ih, iL, iT, iw, ih);
+  if (iT > 0) eg.drawImage(ext, 0, iT, W2, Math.min(st, ih), 0, 0, W2, iT + Math.min(st, ih));
+  if (iB < H2) eg.drawImage(ext, 0, iB - Math.min(st, ih), W2, Math.min(st, ih), 0, iB - Math.min(st, ih), W2, H2 - iB + Math.min(st, ih));
+  // 4. 糊開：縮成很小再放大兩次
+  const k = 24;
+  const t1 = newCanvas(W2 / k, H2 / k);
+  const g1 = t1.getContext('2d');
+  g1.imageSmoothingEnabled = true;
+  g1.imageSmoothingQuality = 'high';
+  g1.drawImage(ext, 0, 0, t1.width, t1.height);
+  const t2 = newCanvas(W2 / 6, H2 / 6);
+  const g2 = t2.getContext('2d');
+  g2.imageSmoothingEnabled = true;
+  g2.imageSmoothingQuality = 'high';
+  g2.drawImage(t1, 0, 0, t2.width, t2.height);
+  // 5. 照片邊緣往內淡出
+  const F = Math.max(8, Math.round(sh * EXTEND_FEATHER));
+  const fe = newCanvas(W2, H2);
+  const fg = fe.getContext('2d');
+  fg.drawImage(base, 0, 0);
+  fg.globalCompositeOperation = 'destination-in';
+  const fade = (x0, y0, x1, y1) => {
+    const gr = fg.createLinearGradient(x0, y0, x1, y1);
+    gr.addColorStop(0, 'rgba(0,0,0,0)');
+    gr.addColorStop(1, 'rgba(0,0,0,1)');
+    fg.fillStyle = gr;
+    fg.fillRect(0, 0, W2, H2);
+  };
+  if (iT > 0) fade(0, iT, 0, iT + F);
+  if (iB < H2) fade(0, iB, 0, iB - F);
+  if (iL > 0) fade(iL, 0, iL + F, 0);
+  if (iR < W2) fade(iR, 0, iR - F, 0);
+  // 6. 疊起來：糊開的延伸墊底，淡出的照片在上
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sx, sy, sw, sh);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(t2, sx, sy, W2, H2);
+  ctx.drawImage(fe, sx, sy);
   ctx.restore();
 }
 
@@ -828,6 +1071,7 @@ function compose(ctx, { exportMode = false } = {}) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.drawImage(A.base, 0, 0);
+  const gaps = uncoveredSlots();
   for (const slot of ['before', 'after']) {
     const p = state.photos[slot];
     const [sx, sy, sw, sh] = SLOTS[slot];
@@ -843,12 +1087,18 @@ function compose(ctx, { exportMode = false } = {}) {
       }
       continue;
     }
-    if (exportMode) { drawPhoto(ctx, slot, p, wbFilter(p.bitmap, p.wb.gains), 1); continue; }
+    if (exportMode) {
+      const src = wbFilter(p.bitmap, p.wb.gains);
+      if (gaps.includes(slot)) drawExtended(ctx, slot, p, src, 1, p.t);
+      else drawPhoto(ctx, slot, p, src, 1);
+      continue;
+    }
     if (pickingSlot() === slot) {
       ctx.fillStyle = '#eceef1';
       ctx.fillRect(sx, sy, sw, sh);
     }
-    drawPhoto(ctx, slot, p, workSource(p), 1 / p.k, 0, 1, viewT(slot, p));
+    if (gaps.includes(slot) && !pickingSlot()) drawExtended(ctx, slot, p, workSource(p), 1 / p.k, viewT(slot, p));
+    else drawPhoto(ctx, slot, p, workSource(p), 1 / p.k, 0, 1, viewT(slot, p));
   }
   if (!exportMode && !pickingSlot() && state.onion && state.photos.before && state.photos.after) {
     const p = state.photos.after;
@@ -895,9 +1145,10 @@ function uncoveredSlots() {
     const p = state.photos[slot];
     if (!p) continue;
     const [sx, sy, sw] = SLOTS[slot];
+    const H = halvesOf(p.region ? p.region.pts : [c(0, 0), c(p.bitmap.width, 0), c(p.bitmap.width, p.bitmap.height), c(0, p.bitmap.height)]);
     const inside = [c(sx, sy), c(sx + sw, sy), c(sx + sw, VISIBLE_BOTTOM), c(sx, VISIBLE_BOTTOM)]
       .map((q) => invT(p.t, q))
-      .every((z) => z.re >= -1.5 && z.im >= -1.5 && z.re <= p.bitmap.width + 1.5 && z.im <= p.bitmap.height + 1.5);
+      .every((z) => H.every((q) => q.n.re * z.re + q.n.im * z.im <= q.k + 1.5 * cAbs(q.n)));
     if (!inside) out.push(slot);
   }
   return out;
@@ -914,7 +1165,7 @@ function render() {
     refreshPhotoTools();
     const gaps = uncoveredSlots();
     $('#coverWarn').textContent = gaps.length
-      ? `${gaps.map((s) => SLOT_NAME[s]).join('、')} 照片沒有填滿格子，邊緣會露出底色。兩張照片拍的範圍差太多，建議換一張拍得比較接近的照片。`
+      ? `${gaps.map((s) => SLOT_NAME[s]).join('、')} 照片範圍不夠，每一邊最多只裁一成，不夠的地方用同一張照片模糊延伸補滿。能重拍的話，用直拍、拍大一點的範圍效果最好。`
       : '';
   });
 }
@@ -1057,7 +1308,50 @@ function refreshMaskStatus() {
 }
 
 // ---------- 載入照片 ----------
-async function handleFiles(files, preferSlot) {
+// 照片範圍不夠（放大填滿會裁超過一成）：先請使用者重拍；沒辦法重拍才改用模糊延伸，並先警告會變成怎樣。
+// 回傳 true＝照模糊延伸做；false＝拿掉照片去重拍或取消。
+const shortPending = () => uncoveredSlots().filter((s) => !state.shortOK.has(state.photos[s].hash));
+async function askRetake() {
+  const slots = shortPending();
+  if (!slots.length) return true;
+  const names = slots.map((s) => SLOT_NAME[s]).join('、');
+  const first = await askSlot({
+    title: '照片範圍不夠，放大填滿會裁到部位',
+    hint: `${names} 這張拍的範圍太小，要填滿格子就得把嘴唇或臉裁掉一塊。請用同樣的距離，直拍、拍大一點的範圍重拍，再放進來。`,
+    files: slots.map((s) => state.photos[s].file).filter(Boolean),
+    labels: slots.map((s) => SLOT_NAME[s]),
+    buttons: [
+      { value: 'cancel', text: '先不要' },
+      { value: 'keep', text: '沒辦法重拍' },
+      { value: 'retake', text: '我去重拍', primary: true },
+    ],
+  });
+  if (first === 'cancel') return false;
+  let ok = false;
+  if (first === 'keep') {
+    const second = await askSlot({
+      title: '沒辦法重拍的話，會改成這樣做',
+      hint: '還是放大填滿，但照片每一邊最多只裁掉一成；不夠的地方，用同一張照片放大、模糊後補滿。一般手機直拍的照片幾乎都不會用到這種補法。',
+      files: [],
+      buttons: [
+        { value: 'cancel', text: '我還是去重拍' },
+        { value: 'ok', text: '好，就這樣做', primary: true },
+      ],
+    });
+    ok = second === 'ok';
+  }
+  if (ok) {
+    slots.forEach((s) => state.shortOK.add(state.photos[s].hash));
+    setMsg(`${names} 照片範圍不夠，已改成每邊最多裁一成、不夠的地方模糊延伸補滿`);
+    render();
+    return true;
+  }
+  slots.forEach((s) => removePhoto(s));
+  setMsg(`已拿掉 ${names} 照片，重拍後按「選照片」放進來`);
+  return false;
+}
+
+async function handleFiles(files, preferSlot, { askShort = false } = {}) {
   const imgs = [...files].filter((f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
   if (!imgs.length) return;
   let order;
@@ -1068,6 +1362,7 @@ async function handleFiles(files, preferSlot) {
   setBusy(true);
   try { await placeFiles(imgs, order, n, tokens); } finally { setBusy(false); }
   render();
+  if (askShort) await askRetake();
   askTreatment();
 }
 
@@ -1096,7 +1391,7 @@ async function placeFiles(imgs, order, n, tokens) {
 }
 
 document.querySelectorAll('input[type="file"][data-slot]').forEach((input) => {
-  input.addEventListener('change', () => { handleFiles(input.files, input.dataset.slot); input.value = ''; });
+  input.addEventListener('change', () => { handleFiles(input.files, input.dataset.slot, { askShort: true }); input.value = ''; });
 });
 
 const wrap = $('#canvasWrap');
@@ -1183,7 +1478,7 @@ async function askAndPlace(files, hintSlot) {
         { value: 'before', text: '術前 Before', primary: guess === 'before' },
       ],
     });
-    if (choice === 'before' || choice === 'after') await handleFiles([f], choice);
+    if (choice === 'before' || choice === 'after') await handleFiles([f], choice, { askShort: true });
     return;
   }
   // 兩張以上：只用前兩張，照檔案時間排，早的當術前
@@ -1200,7 +1495,7 @@ async function askAndPlace(files, hintSlot) {
       { value: 'ok', text: '對，放進去', primary: true },
     ],
   });
-  if (choice === 'ok') await handleFiles(pair, null);
+  if (choice === 'ok') await handleFiles(pair, null, { askShort: true });
 }
 
 // Before 的檔案時間比 After 晚一分鐘以上，提醒可能放反（只提醒，不擋）
@@ -1235,7 +1530,7 @@ async function swapPhotos() {
   for (const m of state.masks) m.slot = m.slot === 'before' ? 'after' : 'before';
   for (const slot of ['before', 'after']) {
     const p = state.photos[slot];
-    if (p) { p.points = []; p.t = coverTransform(slot, p.bitmap.width, p.bitmap.height); }
+    if (p) { p.points = []; p.t = coverPhoto(slot, p.bitmap, p.region); }
     showSlotInfo(slot);
   }
   state.aligned = false;
@@ -1396,8 +1691,7 @@ $('#exportBtn').addEventListener('click', async () => {
   if (!state.fontOk) problems.push('標題字型沒有載入成功');
   if (problems.length) { alert(`還不能匯出：\n・${problems.join('\n・')}`); return; }
   if (orderSuspect() && !confirm('Before 這張的檔案時間比 After 晚，看起來可能放反了。確定 Before、After 沒有放反，要照這樣匯出嗎？')) return;
-  const gaps = uncoveredSlots();
-  if (gaps.length && !confirm(`${gaps.map((s) => SLOT_NAME[s]).join('、')} 照片沒有填滿格子，匯出的圖邊緣會露出底色。確定照這樣匯出嗎？`)) return;
+  if (shortPending().length && !(await askRetake())) return;
   const dlg = $('#exportDialog');
   dlg.querySelectorAll('input[type="checkbox"]').forEach((cb) => { cb.checked = false; });
   dlg.returnValue = '';
