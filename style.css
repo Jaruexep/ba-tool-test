@@ -182,8 +182,10 @@ dialog label.pick { flex-direction: column; }
 .slot-thumbs img { display: block; width: 100%; max-height: 180px; object-fit: contain; background: var(--bg); border-radius: 6px; }
 .slot-thumbs figcaption strong { display: block; color: var(--ink); font-size: 15px; margin-top: 4px; }
 #slotMenu { flex-wrap: wrap; }
-.photo-fix { margin-top: 8px; }
-.photo-fix button { font-size: 13px; padding: 5px 10px; }
+.photo-fix { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.photo-fix button { font-size: 16px; padding: 12px 8px; color: var(--ink); }
+.photo-fix button:disabled { color: var(--muted); }
+#orderWarn:empty { display: none; }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 14px 0 0; }
 @media (max-width: 900px) {
   .layout { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 24px; }
@@ -191,4 +193,6 @@ dialog menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; ma
   .top { padding: 14px 16px 6px; }
   .stage { position: static; }
   #view { max-height: none; }
+  .photo-fix { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .photo-fix button { font-size: clamp(13px, 4.2vw, 16px); padding: 12px 4px; white-space: nowrap; }
 }
