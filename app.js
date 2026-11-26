@@ -18,7 +18,7 @@ function useSpec(key) {
 useSpec(storageGet(FORMAT_KEY, 'post'));
 const WORK_MAX = 2400; // 操作時的工作尺寸；匯出一律用原圖重算
 const TREAT_KEY = 'ba-tool-treatments';
-const FRAME_ID = 'omni-lips-v2';
+const FRAME_ID = 'omni-clinic-v3';
 const TOOL_VERSION = window.TOOL_VERSION || '未標版本';
 
 const PARTS = {
